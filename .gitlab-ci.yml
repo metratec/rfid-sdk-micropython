@@ -12,6 +12,6 @@ build-job:       # This job runs in the build stage, which runs first.
     paths:
         - examples
         - reader.py
-        - Readme.md
+        - README.md
 
 
