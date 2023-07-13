@@ -301,7 +301,7 @@ class RfidReaderGen2():
     def _initialise(self):
         """Initialise and prepare the reader
         """
-        self._uart.init(timeout=500)
+        self._uart.init(baudrate=115200, bits=8, parity=None, stop=1, timeout=500)
         self._send_command('ATE1', command_response=False)
 
     def get_reader_info(self) -> dict[str, str]:

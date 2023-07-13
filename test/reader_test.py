@@ -1,4 +1,7 @@
-"""_summary_
+"""
+Test class for the reader library
+
+Copy the reader library to the device and then run the tests...
 """
 import math
 
