@@ -1,6 +1,6 @@
-# Metratec Reader Library for MicroPython
+# Metratec RFID Reader SDK for MicroPython
 
-With the Metratec Reader Library for MicroPython you can easily integrate Metratec RFID readers into your MicroPython project and communicate with RFID transponders without having to know the reader protocol.
+With the Metratec RFI DReader SDK for MicroPython you can easily integrate Metratec RFID readers into your MicroPython project and communicate with RFID transponders without having to know the reader protocol.
 
 ## Requirements
 
@@ -8,9 +8,9 @@ The Metratec Reader must be connected to the controller via a UART.
 
 ## Installation
 
-To use the Metratec QRG2 reader in your MicroPython project, simply copy the metratec_reader.py file to your controller.
+To use the a Metratec RFID reader in your MicroPython project, simply copy the metratec_reader.py file to your controller and change according to your hardware.
 
-## Usage
+## Example Usage (for QRG2)
 
 To use the QRG2 reader with your project, create a new QRG2 reader instance and define the connected UART. Then you can get the current inventory, read or write the transponder data.
 

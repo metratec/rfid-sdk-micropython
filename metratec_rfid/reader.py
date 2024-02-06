@@ -250,7 +250,7 @@ class ExpectedReaderInfo():
         return clazz
 
 
-class RfidReaderGen2():
+class RfidReaderAt():
     """The base implementation of a rfid reader
     """
 
@@ -350,7 +350,7 @@ class RfidReaderGen2():
                 f"Wrong reader - Not expected info response - {response}") from err
 
 
-class UhfReaderGen2(RfidReaderGen2):
+class UhfAtReader(RfidReaderAt):
     """The implementation of the uhf gen2 reader with the **AT-protocol.**
     """
 
@@ -1159,12 +1159,31 @@ class UhfReaderGen2(RfidReaderGen2):
 
 
 @ExpectedReaderInfo("QRG2", "QRG2", 1.3)
-class QRG2(UhfReaderGen2):
-    """The QRG2 is the first UHF RFID module that integrates all necessary components (read/write and antenna)
-    into a single product. Just place the module in your machine and start using UHF RFID. This gives you the
-    advantage of cheaper UHF transponders and longer read ranges at a price comparable to HF RFID systems.
+class QRG2(UhfAtReader):
+    """The QRG2 is a compact UHF RFID module that integrates antenna and reader into a single OEM module.
     """
 
+@ExpectedReaderInfo("DWARFG2_v2", "DWARFG2_v2", 1.0)
+class DwarfG2_v2(UhfAtReader):
+    """The DwarfG2_v2 is a compact UHF RFID module with up to 21dBm output power and external antenna.
+    """
+    def set_output_mask(self, pin1: bool, pin2: bool, pin3: bool, pin4: bool) -> None:
+        """Set the output pin 
+
+        Args:
+            pin1 (bool): set pin1 to high (true) or low (false)
+            
+            pin2 (bool): set pin2 to high (true) or low (false)
+
+            pin3 (bool): set pin3 to high (true) or low (false)
+
+            pin4 (bool): set pin4 to high (true) or low (false)
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        """
+        self._send_command('AT+OUT', pin1, pin2, pin3, pin4)
 
 # uart0 = UART(0, baudrate=115200, tx=Pin(16), rx=Pin(17), bits=8, parity=None, stop=1, timeout=1000)
 # reader = QRG2(uart0)
