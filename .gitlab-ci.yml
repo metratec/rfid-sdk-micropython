@@ -5,7 +5,7 @@ stages:          # List of stages for jobs, and their order of execution
 build-job:       # This job runs in the build stage, which runs first.
   stage: build
   script:
-    - cp metratec_rfid/reader.py .
+    - cp metratec_rfid/metratec_rfid_lib.py .
     - echo "Compile complete."
   artifacts:
     name: rfid-sdk-micropython
