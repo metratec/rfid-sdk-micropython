@@ -1185,6 +1185,14 @@ class DwarfG2_v2(UhfAtReader):
         """
         self._send_command('AT+OUT', pin1, pin2, pin3, pin4)
 
+
+@ExpectedReaderInfo("DWARFG2-MINI_v2", "DWARFG2-MINI_v2", 1.0)
+class DwarfG2_Mini_v2(DwarfG2_v2):
+    """The DwarfG2-Mini_v2 is a compact UHF RFID module with up to 9dBm output power and external antenna.
+    """
+
+
+# Testing
 # uart0 = UART(0, baudrate=115200, tx=Pin(16), rx=Pin(17), bits=8, parity=None, stop=1, timeout=1000)
 # reader = QRG2(uart0)
 
