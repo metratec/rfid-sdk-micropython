@@ -256,6 +256,7 @@ class RfidReaderAt():
 
     def __init__(self, uart: UART):
         self._uart = uart
+        self._config: dict = {}
         self._initialise()
 
     def _prepare_command(self, command: str, *parameters) -> str:
@@ -264,16 +265,15 @@ class RfidReaderAt():
             return command
         return command + "=" + ",".join(str(x) for x in parameters if x is not None)
 
-    def _send_command(self, command: str, *parameters, timeout: int = 2000, command_response: bool = True) -> list[str]:
+    def _send_command(self, command: str, *parameters, timeout: int = 2000) -> list[str]:
         send_command = self._prepare_command(command, *parameters)
-        # print(f"send: {send_command}")
+        # print(f"{ticks_ms()} send: {send_command}")
         self._uart.write((send_command + '\r').encode())
         max_time = ticks_ms() + timeout
         response: str = ""
-        response_started = not command_response
         while True:
             resp = self._uart.readline()
-            # print(f"recv1: {resp}")
+            # print(f"{ticks_ms()} recv1: {resp}")
             if resp is None:
                 if max_time <= ticks_ms():
                     break
@@ -283,21 +283,18 @@ class RfidReaderAt():
             if not resp:
                 continue
             resp = resp.decode()
-            # print(f"recv2: {resp}")
-            if response_started:
-                if resp == 'OK':
-                    return response.split("\r") if response else [""]
-                if resp == 'ERROR':
-                    try:
-                        msg = response[response.rindex(
-                            "<")+1:response.rindex(">")]
-                    except ValueError:
-                        msg = response
-                    raise RfidReaderException(str(msg))
-                response = resp
-            else:
-                if send_command in resp:
-                    response_started = True
+            # print(f"{ticks_ms()} recv2: {resp}")
+            if resp == 'OK':
+                return response.split("\r") if response else [""]
+            if resp == 'ERROR':
+                try:
+                    msg = response[response.rindex(
+                        "<")+1:response.rindex(">")]
+                except ValueError:
+                    msg = response
+                raise RfidReaderException(str(msg))
+            response = resp
+
         if not response:
             raise RfidReaderException(f"no reader response for command {send_command}")
         raise RfidReaderException(f"wrong response for command {send_command} - {str(response)}")
@@ -306,7 +303,7 @@ class RfidReaderAt():
         """Initialise and prepare the reader
         """
         self._uart.init(baudrate=115200, bits=8, parity=None, stop=1, timeout=500)
-        self._send_command('ATE1', command_response=False)
+        self._send_command('ATE0')
 
     def get_reader_info(self) -> dict[str, str]:
         """Returns the reader information
@@ -375,7 +372,7 @@ class UhfAtReader(RfidReaderAt):
             self._send_command('AT+BINVR')
         except RfidReaderException:
             pass
-        self.set_inventory_settings(False, True, True)
+        self._config['inventory'] = self.get_inventory_settings()
 
     def get_inventory_settings(self) -> dict:
         """Gets the current reader inventory settings
@@ -388,16 +385,29 @@ class UhfAtReader(RfidReaderAt):
         """
         response: list[str] = self._send_command("AT+INVS?")
         # +INVS: 0,1,0
+        data: list[str] = response[0][7:].split(',')
         try:
-            config: dict[str, bool] = {'only_new_tag': response[0][7] == '1',
-                                       'with_rssi': response[0][9] == '1', 'with_tid': response[0][11] == '1'}
+            config: dict[str, object] = {'only_new_tag': data[0] == '1',
+                                         'with_rssi': data[1] == '1',
+                                         'with_tid': data[2] == '1'
+                                         }
+            if len(data) >= 4:
+                config['fast_start'] = data[3] == '1'
+            if len(data) >= 5:
+                config['phase'] = data[4] == '1'
+            if len(data) >= 6:
+                config['select'] = data[5]
+            if len(data) >= 7:
+                config['target'] = data[6]
             return config
         except IndexError as err:
             raise RfidReaderException(
                 f"Not expected response for command AT+INVS? - {response}") from err
 
-    def set_inventory_settings(self, only_new_tag: bool = False, with_rssi: bool = True,
-                               with_tid: bool = False) -> None:
+    def set_inventory_settings(self, only_new_tag: object = None, with_rssi: object = None,
+                               with_tid: object = None, fast_start: object = None,
+                               phase: object = None, select: object = None,
+                               target: object = None) -> None:
         """Configure the inventory response
 
         Args:
@@ -407,18 +417,53 @@ class UhfAtReader(RfidReaderAt):
 
             with_tid (bool, optional): Append the tid to the response. Defaults to False.
 
+            fast_start (bool, optional): Does an inventory without putting all tags into session
+            state A at the start. This can speed up the start of the inventory, but it requires
+            that all tags are in "reset state".
+
+            phase (bool, optional): Append the the phase information to the inventory
+
+            select (str, optional): Use to set witch tag should respond. 'ALL' for all, 'SL' for select asserted,
+            'NSL' for select not asserted
+
+            target (str, optional): Use to set witch tag should respond. Can be 'A' or 'B'
+
         Raises:
             RfidReaderException: if an reader error occurs
         """
-        self._send_command("AT+INVS", 1 if only_new_tag else 0, 1 if with_rssi else 0, 1 if with_tid else 0)
+        def bti(value):
+            return '1' if value else '0'
+
+        config: dict[str, object] = self._config['inventory']
+        config_size = len(config)
+
+        parameters: list[object] = []
+        parameters.append(bti(only_new_tag) if only_new_tag is not None else bti(config['only_new_tag']))
+        parameters.append(bti(with_rssi) if with_rssi is not None else bti(config['with_rssi']))
+        parameters.append(bti(with_tid) if with_tid is not None else bti(config['with_tid']))
+        if config_size >= 4:
+            parameters.append(bti(fast_start) if fast_start is not None else bti(config['fast_start']))
+        if config_size >= 5:
+            parameters.append(bti(phase) if phase is not None else bti(config['phase']))
+        if config_size >= 6:
+            parameters.append(select if select is not None else config['select'])
+        if config_size >= 7:
+            parameters.append(target if target is not None else config['target'])
+
+        self._send_command("AT+INVS", *parameters)
 
         # update configuration
-        config = self._config.get('inventory', {})
-        if not config:
-            self._config['inventory'] = config
         config['only_new_tag'] = only_new_tag
         config['with_rssi'] = with_rssi
         config['with_tid'] = with_tid
+        if config_size >= 4:
+            config['fast_start'] = fast_start
+        if config_size >= 5:
+            config['phase'] = phase
+        if config_size >= 6:
+            config['select'] = select
+        if config_size >= 7:
+            config['target'] = target
 
     def set_region(self, region: str) -> None:
         """Sets the used uhf region
@@ -531,7 +576,7 @@ class UhfAtReader(RfidReaderAt):
             RfidReaderException: if an reader error occurs
 
         Returns:
-            list[Tag]: An array with the founded transponder
+            list[UhfTag]: An array with the founded transponder
         """
         responses: list[str] = self._send_command("AT+INV")
         inventory: list[UhfTag] = self._parse_inventory(responses, int(time()), ignore_error=ignore_error)
@@ -553,7 +598,7 @@ class UhfAtReader(RfidReaderAt):
             RfidReaderException: if an reader error occurs
 
         Returns:
-            list[Tag]: An array with the founded transponder
+            list[UhfTag]: An array with the founded transponder
         """
         if duration == 0:
             responses: list[str] = self._send_command('AT+INVR')
@@ -1073,6 +1118,7 @@ class UhfAtReader(RfidReaderAt):
         inventory: list[UhfTag] = []
         with_tid: bool = self._config['inventory']['with_tid']
         with_rssi: bool = self._config['inventory']['with_rssi']
+        with_phase: bool = self._config['inventory'].get('phase', False)
         antenna: int = 0
         error: str = ''
         for response in responses:
@@ -1108,6 +1154,8 @@ class UhfAtReader(RfidReaderAt):
                 new_tag.set_rssi(int(info[2]) if with_tid else int(info[1]))
             if is_report:
                 new_tag.set_seen_count(int(info[-1]))
+            if with_phase:
+                new_tag['phase'] = [info[-2], info[-1]]
             inventory.append(new_tag)
         if error:
             error_detail = self._config.get('error', {})
@@ -1163,27 +1211,244 @@ class QRG2(UhfAtReader):
     """The QRG2 is a compact UHF RFID module that integrates antenna and reader into a single OEM module.
     """
 
+
 @ExpectedReaderInfo("DWARFG2_v2", "DWARFG2_v2", 1.0)
 class DwarfG2_v2(UhfAtReader):
     """The DwarfG2_v2 is a compact UHF RFID module with up to 21dBm output power and external antenna.
     """
-    def set_output_mask(self, pin1: bool, pin2: bool, pin3: bool, pin4: bool) -> None:
-        """Set the output pin 
+
+    def get_antenna_powers(self) -> list[int]:
+        """the power value per antenna (index 0 == antenna 1)
+
+        Returns:
+            List[int]: list with the power values
+        """
+        responses: list[str] = self._send_command("AT+PWR?")
+        # +PWR: 12,12,12,12
+        data: list[str] = responses[0][6:].split(',')
+        # return [int(i) for i in data]
+        return list(map(int, data))
+
+    def set_antenna_powers(self, antenna_powers: list[int]) -> None:
+        """set the power values for the antennas
 
         Args:
-            pin1 (bool): set pin1 to high (true) or low (false)
-            
-            pin2 (bool): set pin2 to high (true) or low (false)
+            antenna_powers (List[int]): list with the multiplexer size for each antenna
+            (the index 0 corresponds to the antenna 1)
+        """
+        self._send_command("AT+PWR", *antenna_powers)
 
-            pin3 (bool): set pin3 to high (true) or low (false)
+    def set_antenna_power(self, antenna: int, power: int) -> None:
+        """Sets the antenna power
 
-            pin4 (bool): set pin4 to high (true) or low (false)
+        Args:
+            antenna (int): antenna
+            power (int): antenna power in dbm [0,30]
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+        """
+        if antenna <= 0:
+            raise RfidReaderException(f"Antenna {antenna} not available")
+        powers = self.get_antenna_powers()
+        if antenna > len(powers):
+            raise RfidReaderException(f"Antenna {antenna} not available")
+        powers[antenna - 1] = power
+        self.set_antenna_powers(powers)
+
+    def set_antenna_multiplex(self, antennas) -> None:
+        """Number of antennas to be multiplexed
+
+        Args:
+            antennas (int or List): Number of antennas to be multiplexed or the antenna sequence list
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+        """
+        if isinstance(antennas, int):
+            self._send_command("AT+MUX", antennas)
+        elif isinstance(antennas, list):
+            self._send_command("AT+MUX", *antennas)
+
+    def get_antenna_multiplex(self) -> list[int]:
+        """Gets the antenna multiplex sequence
+
+        Returns:
+            sequence (List[int]): the antenna sequence
+
+        Raises:
+            RfidReaderException: if an error occurs
+        """
+        responses: list[str] = self._send_command("AT+MUX?")
+        # +MUX: 1,2,3,....
+        data: list[str] = responses[0][6:].split(',')
+        if len(data) == 1:
+            return [int(i) for i in data]
+        return list(map(int, data))
+
+    def get_external_multiplexer(self) -> int:
+        """Get the connected multiplexer size
+
+        Raises:
+            RfidReaderException: if an error occurs
+
+        Returns:
+            int: the multiplexer size
+        """
+        # +EMX: 4
+        return int(self._send_command("AT+EMX?")[0][6:])
+
+    def set_external_multiplexer(self, multiplexer_size: int):
+        """Sets the connected multiplexer size
+
+        Args:
+            multiplexer_size (int): the multiplexer size
+
+        Raises:
+            RfidReaderException: if an error occurs
+        """
+        self._send_command("AT+EMX", multiplexer_size)
+
+    async def set_antenna(self, antenna: int) -> None:
+        """Setting the antenna to be used
+
+        Args:
+            antenna (int): the antenna port to be use. Must lie in the interval [1,4]
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+        """
+        self._send_command("AT+ANT", antenna)
+        self._config['antenna'] = antenna
+
+    async def get_antenna(self) -> int:
+        """Return the currently used antenna port
 
         Raises:
             RfidReaderException: if an reader error occurs
 
+        Returns:
+            int: the antenna to use
         """
-        self._send_command('AT+OUT', pin1, pin2, pin3, pin4)
+        try:
+            response: list[str] = self._send_command("AT+ANT?")
+        except RfidReaderException as error:
+            if "ERROR" in str(error):
+                raise RfidReaderException("Multiple antennas not supported") from error
+            raise error
+        # +ANT: 2
+        try:
+            return int(response[0][6:])
+        except IndexError as exc:
+            raise RfidReaderException(
+                f"Not expected response for command AT+ANT? - {response}") from exc
+
+    def get_inventory_multi(self, ignore_error: bool = False) -> list[UhfTag]:
+        """get the current inventory. Multiple antennas are used (see set_antenna_multiplex)
+
+        Args:
+            ignore_error (bool, optional): Set to True to ignore antenna errors. Defaults to False.
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        Returns:
+            list[UhfTag]: An array with the transponder found
+        """
+        responses: list[str] = self._send_command("AT+MINV")
+        # parse multiple inventory
+        # +MINV: <Antenna Error><CR>
+        # +MINV: <ROUND FINISHED, ANT=1><CR>
+        # +MINV: 3034257BF468D480000003EB<CR>
+        # +MINV: <ROUND FINISHED, ANT=2><CR>
+        # +MINV: <Operation Error (6AC0B)><CR>
+        # +MINV: <ROUND FINISHED, ANT=3><CR>
+        # +MINV: <NO TAGS FOUND><CR>
+        # +MINV: <ROUND FINISHED, ANT=4><CR>
+
+        # split answers in antenna sections
+        inventory: list[UhfTag] = []
+        last_index: int = 0
+        for index, item in enumerate(responses):
+            if item.startswith("+MINV: <R"):
+                index += 1
+                inventory.extend(self._parse_inventory(
+                    responses[last_index:index], int(time()), 7, ignore_error))
+                last_index = index
+        return inventory
+
+    def get_outputs(self) -> dict[int, bool]:
+        """Return the current output pin values
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        Returns:
+            dict: the output pin values by the pin
+        """
+        response: list[str] = self._send_command("AT+OUT?")
+        # +OUT: 1,LOW
+        # +OUT: 2,HIGH
+        values: dict[int, bool] = {}
+        for msg in response:
+            values[int(msg[6])] = "HIGH" in msg[8:]
+        self._config['outputs'] = values
+        return values
+
+    def set_outputs(self, outputs: dict[int, bool]) -> None:
+        """Return the current output pin values
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        Returns:
+            dict: the output pin values by the pin
+        """
+        # await self._send_command("AT+OUT",
+        #                          "" if 1 not in outputs else "HIGH" if outputs[1] else "LOW",
+        #                          "" if 2 not in outputs else "HIGH" if outputs[2] else "LOW",
+        #                          "" if 3 not in outputs else "HIGH" if outputs[3] else "LOW",
+        #                          "" if 4 not in outputs else "HIGH" if outputs[4] else "LOW"
+        #                          )
+        self._send_command("AT+OUT",
+                           ",".join("" if x not in outputs else "HIGH" if outputs[x] else "LOW"
+                                    for x in range(1, 5)))
+        self._config['outputs'] = outputs
+
+    def set_output(self, pin: int, value: bool) -> None:
+        """Return the current output pin values
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        Returns:
+            dict: the output pin values by the pin
+        """
+        # await self._send_command("AT+OUT",
+        #                          "" if 1 != pin else "HIGH" if value else "LOW",
+        #                          "" if 2 != pin else "HIGH" if value else "LOW",
+        #                          "" if 3 != pin else "HIGH" if value else "LOW",
+        #                          "" if 4 != pin else "HIGH" if value else "LOW"
+        #                          )
+        outputs = dict(self._config.get('outputs', self.get_outputs()))
+        outputs[pin] = value
+        self._send_command("AT+OUT",
+                           ",".join("" if x != pin else "HIGH" if value else "LOW" for x in range(1, 5)))
+        self._config['outputs'] = outputs
+
+    def get_output(self, pin: int) -> bool:
+        """Return the current output pin value
+
+        Raises:
+            RfidReaderException: if an reader error occurs
+
+        Returns:
+            int: the output pin value
+        """
+        outputs: dict[int, bool] = self.get_outputs()
+        if pin in outputs:
+            return outputs[pin]
+        raise RfidReaderException(f"Output pin {pin} not available")
 
 
 @ExpectedReaderInfo("DWARFG2-MINI_v2", "DWARFG2-MINI_v2", 1.0)
