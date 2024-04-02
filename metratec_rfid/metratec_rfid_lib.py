@@ -5,7 +5,7 @@ metratec rfid reader base class
 from time import time, ticks_ms  # type: ignore  # ignore  pylint: disable=import-error,unused-import,no-name-in-module
 from machine import UART  # type: ignore  # ignore  pylint: disable=import-error,unused-import
 
-__version_info__ = (1, 0, 0)
+__version_info__ = (1, 1, 0)
 __version__ = ".".join(str(x) for x in __version_info__)
 __author__ = 'neumann@metratec.com'
 

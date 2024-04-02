@@ -42,4 +42,3 @@ try:
 except RfidReaderException as exc:
     print(f"Error: {exc}")
 ```
-
