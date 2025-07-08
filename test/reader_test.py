@@ -1,11 +1,11 @@
 """
-Test class for the reader library
+Test class for the Metratec Micropython RFID reader library
 
 Copy the reader library to the device and then run the tests...
 """
 import math
 
-from reader import QRG2, RfidReaderException, UhfTag  # ignore  pylint: disable=import-error,unused-import
+from metratec_rfid_lib import QRG2, RfidReaderException, UhfTag  # ignore  pylint: disable=import-error,unused-import
 from machine import UART, Pin  # type: ignore  # ignore  pylint: disable=import-error,unused-import
 
 

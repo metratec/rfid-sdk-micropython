@@ -12,3 +12,9 @@ build
 # environment settings
 .vscode
 checkCode.sh
+
+scripts
+CLAUDE.md
+.gitignore
+.claude/
+.DS_Store

@@ -1,18 +1,38 @@
 """
-metratec rfid reader base class
+Metratec RFID Reader SDK for MicroPython
+
+This module provides a comprehensive interface for communicating with Metratec UHF RFID readers
+using the AT protocol. It supports most current Metratec UHF OEM modules like the QRG2 and DwarfG2 series.
+
+Key Features:
+- AT protocol implementation for UART communication
+- Support for multiple reader types with different power capabilities
+- Tag inventory, reading, and writing operations
+- Multi-antenna support for advanced readers
+- Comprehensive error handling and validation
+- RF mode configuration for optimal performance
+
+Supported Readers:
+- QRG2: 9dBm, integrated antenna
+- DwarfG2-Mini v2: 9dBm, 1 external antenna, extendable via external multiplexer
+- DwarfG2 v2: 21dBm, 1 external antennas, extendable via external multiplexer
+- DwarfG2_XR v2: 27dBm, 1 external antennas, extendable via external multiplexer
+
+Author: info@metratec.com
+Version: 2.0
 """
 
 from time import time, ticks_ms  # type: ignore  # ignore  pylint: disable=import-error,unused-import,no-name-in-module
 from machine import UART  # type: ignore  # ignore  pylint: disable=import-error,unused-import
 
-__version_info__ = (1, 1, 0)
+__version_info__ = (2, 0, 0)
 __version__ = ".".join(str(x) for x in __version_info__)
-__author__ = 'neumann@metratec.com'
+__author__ = 'info@metratec.com'
 
 
 class RfidReaderException(Exception):
     """
-    Exception class for the metratec rfid reader
+    Exception class for the metratec RFID reader
     """
 
 
@@ -251,48 +271,104 @@ class ExpectedReaderInfo():
 
 
 class RfidReaderAt():
-    """The base implementation of a rfid reader
+    """Base implementation of AT protocol for Metratec RFID readers
+    
+    This class implements the core AT protocol communication layer that follows
+    standard AT command conventions similar to LTE modems. All Metratec RFID
+    products from 2023 onwards use this human-readable protocol.
+    
+    Protocol Format:
+    - Commands end with Carriage Return (CR, 0x0D)
+    - Responses are framed by CR+LF (0x0D+0x0A)
+    - Multi-line responses use prefixes like +INV:, +PWR:, etc.
+    - Status codes: OK (success) or ERROR (failure)
+    - Error messages in format: <Error Message>
     """
 
     def __init__(self, uart: UART):
+        """Initialize AT protocol reader with UART interface
+        
+        Args:
+            uart (UART): Configured UART interface for communication
+        """
         self._uart = uart
-        self._config: dict = {}
+        self._config: dict = {}  # Cache for reader configuration
         self._initialise()
 
     def _prepare_command(self, command: str, *parameters) -> str:
-        # prepare the command with the AT protocol style
+        """Format AT command with parameters according to protocol
+        
+        Converts command and parameters into AT protocol format.
+        Example: AT+PWR + (9,) -> "AT+PWR=9"
+        
+        Args:
+            command (str): AT command (e.g., "AT+PWR")
+            *parameters: Command parameters (filtered for None values)
+            
+        Returns:
+            str: Formatted AT command string
+        """
         if not parameters:
             return command
         return command + "=" + ",".join(str(x) for x in parameters if x is not None)
 
     def _send_command(self, command: str, *parameters, timeout: int = 2000) -> list[str]:
+        """Send AT command and parse response according to protocol
+        
+        Implements the complete AT protocol communication cycle:
+        1. Format and send command with CR terminator
+        2. Read response lines until OK/ERROR status
+        3. Parse and return data lines or raise exception on error
+        
+        Args:
+            command (str): AT command to send
+            *parameters: Command parameters
+            timeout (int): Communication timeout in milliseconds (default: 2000)
+            
+        Returns:
+            list[str]: Response data lines (without status codes)
+            
+        Raises:
+            RfidReaderException: On communication timeout or command error
+        """
         send_command = self._prepare_command(command, *parameters)
-        # print(f"{ticks_ms()} send: {send_command}")
+        
+        # Send command with CR terminator as per AT protocol
         self._uart.write((send_command + '\r').encode())
         max_time = ticks_ms() + timeout
         response: str = ""
+        
+        # Read response lines until status code received
         while True:
             resp = self._uart.readline()
-            # print(f"{ticks_ms()} recv1: {resp}")
+            
+            # Handle timeout case
             if resp is None:
                 if max_time <= ticks_ms():
                     break
                 else:
                     continue
+                    
+            # Remove CR+LF terminator (last 2 bytes)
             resp = resp[:-2]
             if not resp:
                 continue
+                
             resp = resp.decode()
-            # print(f"{ticks_ms()} recv2: {resp}")
+            
+            # Check for status codes
             if resp == 'OK':
+                # Return parsed response lines (split by CR)
                 return response.split("\r") if response else [""]
             if resp == 'ERROR':
+                # Extract error message from <Error Message> format
                 try:
-                    msg = response[response.rindex(
-                        "<")+1:response.rindex(">")]
+                    msg = response[response.rindex("<")+1:response.rindex(">")]
                 except ValueError:
                     msg = response
                 raise RfidReaderException(str(msg))
+                
+            # Accumulate response data
             response = resp
 
         if not response:
@@ -317,8 +393,8 @@ class RfidReaderAt():
         """
         command: str = "ATI"
         response: list[str] = self._send_command(command)
-        # +SW: PULSAR_LR 0100
-        # +HW: PULSAR_LR 0100
+        # +SW: QRG2_ETSI 0102
+        # +HW: QRG2_ETSI 0100
         # +SERIAL: 2020090817420000
         try:
             firmware: list[str] = response[0].split(" ")
@@ -542,7 +618,7 @@ class UhfAtReader(RfidReaderAt):
                 f"Not expected response for command AT+Q? - {response}") from exc
 
     def set_power(self, power: int) -> None:
-        """Sets the antenna power of the reader for all antennas
+        """Sets the output power of the reader in dBm
 
         Args:
             power (int): antenna power in dbm [0,9]
@@ -553,7 +629,7 @@ class UhfAtReader(RfidReaderAt):
         self._send_command("AT+PWR", power)
 
     def get_power(self) -> int:
-        """Return the current power level
+        """Return the current output power level in dBm
 
         Raises:
             RfidReaderException: if an reader error occurs
@@ -568,6 +644,42 @@ class UhfAtReader(RfidReaderAt):
         except IndexError as exc:
             raise RfidReaderException(
                 f"Not expected response for command AT+PWR? - {response}") from exc
+
+    def set_rf_mode(self, rf_mode: int) -> None:
+        """Sets the RF mode for the reader
+        
+        RF modes control internal RF communication settings between tag and reader.
+        Each mode corresponds to specific RF parameters optimized for different scenarios.
+        
+        Common modes:
+        - 285: Sensitivity mode (slower, longer range)
+        - 223: Balanced mode (good speed and range for ETSI)
+        - 103: High speed mode (FCC only)
+        
+        Args:
+            rf_mode (int): RF mode ID from protocol documentation
+            
+        Raises:
+            RfidReaderException: if an reader error occurs or invalid mode
+        """
+        self._send_command("AT+RFM", rf_mode)
+
+    def get_rf_mode(self) -> int:
+        """Return the current RF mode
+        
+        Raises:
+            RfidReaderException: if an reader error occurs
+            
+        Returns:
+            int: the current RF mode ID
+        """
+        response: list[str] = self._send_command("AT+RFM?")
+        # +RFM: 285
+        try:
+            return int(response[0][6:])
+        except IndexError as exc:
+            raise RfidReaderException(
+                f"Not expected response for command AT+RFM? - {response}") from exc
 
     def get_inventory(self, ignore_error: bool = False) -> list[UhfTag]:
         """get the current inventory from the current antenna (see set_antenna)
@@ -1112,31 +1224,57 @@ class UhfAtReader(RfidReaderAt):
             self, responses: list[str],
             timestamp: int, split_index: int = 6,
             ignore_error: bool = False, is_report: bool = False) -> list[UhfTag]:
-        # +CINV: 3034257BF468D480000003EC,E200600311753E33,1755 +CINV=<ROUND FINISHED, ANT=2>
-        # +INV: 0209202015604090990000145549021C,E200600311753F23,1807
+        """Parse inventory response data into UhfTag objects
+        
+        Processes AT protocol inventory responses and creates structured tag objects.
+        Handles various response formats based on inventory settings (RSSI, TID, Phase).
+        
+        Response Examples:
+        - Basic: +INV: E002001234567890
+        - With TID: +INV: E002001234567890,E200600311753F23
+        - With RSSI: +INV: E002001234567890,E200600311753F23,-45
+        - Report: +INVR: E002001234567890,5 (EPC,Count)
+        - Messages: +INV: <NO TAGS FOUND>, +INV: <ROUND FINISHED, ANT=2>
+        
+        Args:
+            responses (list[str]): Raw response lines from AT command
+            timestamp (int): Unix timestamp for tag detection
+            split_index (int): Character index where data starts (default: 6 for "+INV: ")
+            ignore_error (bool): Skip error responses instead of raising exception
+            is_report (bool): Parse as inventory report with count data
+            
+        Returns:
+            list[UhfTag]: Parsed tag objects with EPC, TID, RSSI, and metadata
+        """
 
         inventory: list[UhfTag] = []
-        with_tid: bool = self._config['inventory']['with_tid']
-        with_rssi: bool = self._config['inventory']['with_rssi']
-        with_phase: bool = self._config['inventory'].get('phase', False)
-        antenna: int = 0
-        error: str = ''
+        
+        # Extract configuration for response parsing
+        with_tid: bool = self._config['inventory']['with_tid']      # TID data included
+        with_rssi: bool = self._config['inventory']['with_rssi']    # RSSI values included
+        with_phase: bool = self._config['inventory'].get('phase', False)  # Phase information
+        antenna: int = 0     # Current antenna being processed
+        error: str = ''      # Error message accumulator
+        
+        # Process each response line
         for response in responses:
+            # Skip non-response lines (must start with '+')
             if response[0] != '+':
                 continue
+                
+            # Check for system messages vs tag data
             if response[split_index] == '<':
-                # inventory message, no tag
-                # messages: Antenna Error / NO TAGS FOUND / ROUND FINISHED ANT=2
+                # System messages: <NO TAGS FOUND>, <ROUND FINISHED, ANT=2>, <Error Message>
                 if response[split_index+1] == 'N':  # NO TAGS FOUND
-                    pass
+                    pass  # No action needed, empty result is valid
                 elif response[split_index+1] == 'R':
-                    # ROUND FINISHED ANT2
+                    # ROUND FINISHED ANT=X - extract antenna number
                     try:
                         antenna = int(response[-2:-1])
                     except (IndexError, ValueError) as err:
                         print("Error parsing inventory response - %s", err)
                 elif ignore_error:
-                    pass
+                    pass  # Skip error messages when instructed
                 else:
                     print(f"error: {response[split_index+1:-1]}")
                     error = response[split_index+1:-1]
@@ -1205,65 +1343,53 @@ class UhfAtReader(RfidReaderAt):
             tags.append(tag)
         return tags
 
-
-@ExpectedReaderInfo("QRG2", "QRG2", 1.3)
-class QRG2(UhfAtReader):
-    """The QRG2 is a compact UHF RFID module that integrates antenna and reader into a single OEM module.
-    """
-
-
-@ExpectedReaderInfo("DWARFG2_v2", "DWARFG2_v2", 1.0)
-class DwarfG2_v2(UhfAtReader):
-    """The DwarfG2_v2 is a compact UHF RFID module with up to 21dBm output power and external antenna.
-    """
-
-    def get_antenna_powers(self) -> list[int]:
-        """the power value per antenna (index 0 == antenna 1)
+    def get_output_powers(self) -> list[int]:
+        """Get power value per antenna (index 0 corresponds to antenna 1)
 
         Returns:
-            List[int]: list with the power values
+            list[int]: List with the power values for each antenna
         """
         responses: list[str] = self._send_command("AT+PWR?")
         # +PWR: 12,12,12,12
         data: list[str] = responses[0][6:].split(',')
-        # return [int(i) for i in data]
         return list(map(int, data))
 
-    def set_antenna_powers(self, antenna_powers: list[int]) -> None:
-        """set the power values for the antennas
+    def set_output_powers(self, outputs_powers: list[int]) -> None:
+        """Set power values for multiple antenna ports
 
         Args:
-            antenna_powers (List[int]): list with the multiplexer size for each antenna
-            (the index 0 corresponds to the antenna 1)
+            outputs_powers (list[int]): List with power values for each antenna port
+                                       (index 0 corresponds to antenna 1)
         """
-        self._send_command("AT+PWR", *antenna_powers)
+        self._send_command("AT+PWR", *outputs_powers)
 
-    def set_antenna_power(self, antenna: int, power: int) -> None:
-        """Sets the antenna power
+    def set_output_power(self, antenna: int, power: int) -> None:
+        """Set output power for a specific antenna port
 
         Args:
-            antenna (int): antenna
-            power (int): antenna power in dbm [0,30]
+            antenna (int): Antenna power number (1-based)
+            power (int): Output power in dBm
 
         Raises:
-            RfidReaderException: if an reader error occurs
+            RfidReaderException: If antenna not available or reader error occurs
         """
         if antenna <= 0:
             raise RfidReaderException(f"Antenna {antenna} not available")
-        powers = self.get_antenna_powers()
+        powers = self.get_output_powers()
         if antenna > len(powers):
             raise RfidReaderException(f"Antenna {antenna} not available")
         powers[antenna - 1] = power
-        self.set_antenna_powers(powers)
+        self.set_output_powers(powers)
 
     def set_antenna_multiplex(self, antennas) -> None:
-        """Number of antennas to be multiplexed
+        """Configure antenna multiplexing sequence
 
         Args:
-            antennas (int or List): Number of antennas to be multiplexed or the antenna sequence list
+            antennas (int or list): Number of antennas to multiplex OR 
+                                   specific antenna sequence list
 
         Raises:
-            RfidReaderException: if an reader error occurs
+            RfidReaderException: If reader error occurs
         """
         if isinstance(antennas, int):
             self._send_command("AT+MUX", antennas)
@@ -1271,13 +1397,13 @@ class DwarfG2_v2(UhfAtReader):
             self._send_command("AT+MUX", *antennas)
 
     def get_antenna_multiplex(self) -> list[int]:
-        """Gets the antenna multiplex sequence
+        """Get current antenna multiplex sequence
 
         Returns:
-            sequence (List[int]): the antenna sequence
+            list[int]: The antenna sequence being used
 
         Raises:
-            RfidReaderException: if an error occurs
+            RfidReaderException: If reader error occurs
         """
         responses: list[str] = self._send_command("AT+MUX?")
         # +MUX: 1,2,3,....
@@ -1287,48 +1413,48 @@ class DwarfG2_v2(UhfAtReader):
         return list(map(int, data))
 
     def get_external_multiplexer(self) -> int:
-        """Get the connected multiplexer size
+        """Get connected external multiplexer size
 
         Raises:
-            RfidReaderException: if an error occurs
+            RfidReaderException: If reader error occurs
 
         Returns:
-            int: the multiplexer size
+            int: The multiplexer size (0 if none connected)
         """
         # +EMX: 4
         return int(self._send_command("AT+EMX?")[0][6:])
 
     def set_external_multiplexer(self, multiplexer_size: int):
-        """Sets the connected multiplexer size
+        """Configure external multiplexer size
 
         Args:
-            multiplexer_size (int): the multiplexer size
+            multiplexer_size (int): Size of connected multiplexer (4, 8, 16)
 
         Raises:
-            RfidReaderException: if an error occurs
+            RfidReaderException: If reader error occurs
         """
         self._send_command("AT+EMX", multiplexer_size)
 
-    async def set_antenna(self, antenna: int) -> None:
-        """Setting the antenna to be used
+    def set_antenna(self, antenna: int) -> None:
+        """Select antenna to be used for operations
 
         Args:
-            antenna (int): the antenna port to be use. Must lie in the interval [1,4]
+            antenna (int): Antenna port to use
 
         Raises:
-            RfidReaderException: if an reader error occurs
+            RfidReaderException: If reader error occurs
         """
         self._send_command("AT+ANT", antenna)
         self._config['antenna'] = antenna
 
-    async def get_antenna(self) -> int:
-        """Return the currently used antenna port
+    def get_antenna(self) -> int:
+        """Get currently selected antenna port
 
         Raises:
-            RfidReaderException: if an reader error occurs
+            RfidReaderException: If reader error occurs
 
         Returns:
-            int: the antenna to use
+            int: Currently selected antenna number
         """
         try:
             response: list[str] = self._send_command("AT+ANT?")
@@ -1344,29 +1470,26 @@ class DwarfG2_v2(UhfAtReader):
                 f"Not expected response for command AT+ANT? - {response}") from exc
 
     def get_inventory_multi(self, ignore_error: bool = False) -> list[UhfTag]:
-        """get the current inventory. Multiple antennas are used (see set_antenna_multiplex)
+        """Get inventory using multiple antennas (configured with set_antenna_multiplex)
 
         Args:
-            ignore_error (bool, optional): Set to True to ignore antenna errors. Defaults to False.
+            ignore_error (bool, optional): Skip antenna errors. Defaults to False.
 
         Raises:
-            RfidReaderException: if an reader error occurs
+            RfidReaderException: If reader error occurs
 
         Returns:
-            list[UhfTag]: An array with the transponder found
+            list[UhfTag]: Array of transponders found across all antennas
         """
         responses: list[str] = self._send_command("AT+MINV")
-        # parse multiple inventory
+        
+        # Parse multiple inventory responses
         # +MINV: <Antenna Error><CR>
         # +MINV: <ROUND FINISHED, ANT=1><CR>
         # +MINV: 3034257BF468D480000003EB<CR>
         # +MINV: <ROUND FINISHED, ANT=2><CR>
-        # +MINV: <Operation Error (6AC0B)><CR>
-        # +MINV: <ROUND FINISHED, ANT=3><CR>
-        # +MINV: <NO TAGS FOUND><CR>
-        # +MINV: <ROUND FINISHED, ANT=4><CR>
-
-        # split answers in antenna sections
+        
+        # Split responses into antenna sections
         inventory: list[UhfTag] = []
         last_index: int = 0
         for index, item in enumerate(responses):
@@ -1376,6 +1499,19 @@ class DwarfG2_v2(UhfAtReader):
                     responses[last_index:index], int(time()), 7, ignore_error))
                 last_index = index
         return inventory
+
+
+@ExpectedReaderInfo("QRG2", "QRG2", 1.3)
+class QRG2(UhfAtReader):
+    """The QRG2 is a compact UHF RFID module that integrates antenna and reader into a single OEM module.
+    """
+
+
+@ExpectedReaderInfo("DWARFG2_v2", "DWARFG2_v2", 1.0)
+class DwarfG2_v2(UhfAtReader):
+    """The DwarfG2_v2 is a compact UHF RFID module with up to 21dBm output power and single external antenna.
+    """
+
 
     def get_outputs(self) -> dict[int, bool]:
         """Return the current output pin values
@@ -1454,6 +1590,12 @@ class DwarfG2_v2(UhfAtReader):
 @ExpectedReaderInfo("DWARFG2-MINI_v2", "DWARFG2-MINI_v2", 1.0)
 class DwarfG2_Mini_v2(DwarfG2_v2):
     """The DwarfG2-Mini_v2 is a compact UHF RFID module with up to 9dBm output power and external antenna.
+    """
+
+
+@ExpectedReaderInfo("DWARFG2-XR_v2", "DWARFG2-XR_v2", 1.0)
+class DwarfG2_XR_v2(DwarfG2_v2):
+    """The DwarfG2_XR_v2 is a long-range UHF RFID module with up to 27dBm output power and external antenna.
     """
 
 
